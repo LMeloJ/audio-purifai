@@ -12,7 +12,7 @@ export async function probeWav(path: string): Promise<WavInfo> {
 }
 
 export async function startQueue(payload: QueueStartPayload): Promise<void> {
-  return invoke("start_queue", {payload});
+  return invoke("start_queue", { ...payload });
 }
 
 export async function cancelQueue(): Promise<void> {
