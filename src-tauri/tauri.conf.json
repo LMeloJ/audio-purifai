@@ -34,6 +34,8 @@
       "icons/icon.ico"
     ],
     "targets": ["nsis", "deb", "appimage"],
-    "resources": ["../scripts"]
+    "resources": {
+      "../scripts": "scripts"
+    }
   }
 }
