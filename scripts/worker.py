@@ -63,7 +63,7 @@ def main():
         model.eval()
         emit({"status": "ready", "device": device})
     except Exception as e:
-        emit({"status": "error", "message": f"Failed to load model: {e}"})
+        emit({"status": "error", "message": f"Failed to load model: {e}\n{traceback.format_exc()}"})
         sys.exit(1)
 
     # Main command loop
