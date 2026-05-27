@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import toast from "react-hot-toast";
 import { probeWav, startQueue, cancelQueue, checkEnvironment, initializeEnvironment, loadModel } from "./lib/api";
-import { bindJobEvents, listenModelStatus } from "./lib/events";
+import { bindJobEvents, listenModelStatus, listenInstallLog } from "./lib/events";
 import type { ModelStatus, QueueSettings, UiFileJob } from "./lib/types";
 import { DropZone } from "./components/DropZone";
 import { FileRow } from "./components/FileRow";
@@ -29,6 +29,16 @@ export default function App() {
   const [modelStatus, setModelStatus] = useState<ModelStatus>("checking");
   const [modelDevice, setModelDevice] = useState<string>("");
   const [envError, setEnvError] = useState("");
+  const [installLogs, setInstallLogs] = useState<string[]>([]);
+  const [showInstallLogs, setShowInstallLogs] = useState(false);
+  const logsEndRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll logs
+  useEffect(() => {
+    if (showInstallLogs && logsEndRef.current) {
+      logsEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [installLogs, showInstallLogs]);
 
   // Check environment on mount, then auto-load model if env is ready
   useEffect(() => {
@@ -52,32 +62,30 @@ export default function App() {
 
   // Listen for model status events from the Rust backend
   useEffect(() => {
-    let disposed = false;
-    let unlisten: (() => void) | null = null;
-
+    let unlistenStatus: any;
+    let unlistenLogs: any;
+    
     listenModelStatus((payload) => {
-      if (disposed) return;
-      switch (payload.status) {
-        case "loading":
-          setModelStatus("loading_model");
-          break;
-        case "ready":
-          setModelStatus("ready");
-          if (payload.device) setModelDevice(payload.device);
-          break;
-        case "error":
-          setModelStatus("error");
-          setEnvError(payload.message ?? "Unknown error");
-          break;
+      setModelStatus(payload.status as ModelStatus);
+      if (payload.message) {
+        setEnvError(payload.message);
       }
-    }).then((fn) => {
-      if (disposed) fn();
-      else unlisten = fn;
+      if (payload.device) {
+        setModelDevice(payload.device);
+      }
+    }).then((un) => {
+      unlistenStatus = un;
+    });
+
+    listenInstallLog((line) => {
+      setInstallLogs((prev) => [...prev, line]);
+    }).then((un) => {
+      unlistenLogs = un;
     });
 
     return () => {
-      disposed = true;
-      unlisten?.();
+      if (unlistenStatus) unlistenStatus();
+      if (unlistenLogs) unlistenLogs();
     };
   }, []);
 
@@ -284,10 +292,28 @@ export default function App() {
           )}
           {modelStatus === "installing" && (
             <div className="flex flex-col gap-3">
-              <div className="w-full bg-zinc-800 rounded-full h-2 overflow-hidden relative">
-                <div className="absolute inset-0 bg-gradient-to-r from-purple-500 to-cyan-500 animate-[translate_2s_linear_infinite] w-1/2"></div>
+              <div className="w-full bg-zinc-800 rounded-full h-2 overflow-hidden">
+                <div className="h-full bg-gradient-to-r from-purple-500 to-cyan-500 animate-pulse w-full"></div>
               </div>
-              <p className="text-sm text-cyan-400 animate-pulse">Installing PyTorch &amp; DeepFilterNet…</p>
+              <div className="flex justify-between items-center">
+                <p className="text-sm text-cyan-400 animate-pulse">Installing PyTorch &amp; DeepFilterNet…</p>
+                <button
+                  onClick={() => setShowInstallLogs(!showInstallLogs)}
+                  className="text-xs underline text-zinc-500 hover:text-white"
+                >
+                  {showInstallLogs ? "Hide details" : "More details"}
+                </button>
+              </div>
+              
+              {showInstallLogs && (
+                <div className="mt-2 text-left bg-black border border-zinc-800 rounded-lg p-3 max-h-48 overflow-y-auto font-mono text-xs text-zinc-400 break-all shadow-inner">
+                  {installLogs.map((log, i) => (
+                    <div key={i}>{log}</div>
+                  ))}
+                  {installLogs.length === 0 && <div>Waiting for output...</div>}
+                  <div ref={logsEndRef} />
+                </div>
+              )}
             </div>
           )}
           {modelStatus === "loading_model" && (

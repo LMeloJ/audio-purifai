@@ -35,3 +35,9 @@ export async function listenModelStatus(
 ): Promise<UnlistenFn> {
   return listen<ModelStatusPayload>("model:status", (event) => handler(event.payload));
 }
+
+export async function listenInstallLog(
+  handler: (logLine: string) => void
+): Promise<UnlistenFn> {
+  return listen<string>("install:log", (event) => handler(event.payload));
+}

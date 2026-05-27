@@ -18,6 +18,21 @@ import json
 import os
 import sys
 import traceback
+import subprocess
+
+# Monkey-patch check_output to gracefully handle missing executables (like 'git').
+# DeepFilterNet's init_df tries to run 'git' for logging and crashes on systems without Git.
+_original_check_output = subprocess.check_output
+
+def _safe_check_output(*args, **kwargs):
+    try:
+        return _original_check_output(*args, **kwargs)
+    except FileNotFoundError:
+        # Simulate a non-zero exit code if the executable isn't found
+        cmd = args[0] if args else kwargs.get("args", ["unknown"])
+        raise subprocess.CalledProcessError(1, cmd)
+
+subprocess.check_output = _safe_check_output
 
 def main():
     # Flush stdout line-by-line so Rust can read responses immediately

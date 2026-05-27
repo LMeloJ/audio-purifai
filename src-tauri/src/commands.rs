@@ -3,11 +3,10 @@ use std::sync::{
     Arc,
 };
 
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::{queue, worker, AppState};
 use std::path::PathBuf;
-use tauri::Manager;
 
 pub fn get_venv_bin_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let mut venv_dir = app
@@ -110,10 +109,38 @@ pub async fn initialize_environment(app: AppHandle) -> Result<(), String> {
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
 
-    let output = cmd.output().await.map_err(|e| e.to_string())?;
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
 
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+
+    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
+
+    let app_clone = app.clone();
+    let stdout_task = tokio::spawn(async move {
+        use tokio::io::AsyncBufReadExt;
+        let mut reader = tokio::io::BufReader::new(stdout).lines();
+        while let Ok(Some(line)) = reader.next_line().await {
+            let _ = app_clone.emit("install:log", line);
+        }
+    });
+
+    let app_clone = app.clone();
+    let stderr_task = tokio::spawn(async move {
+        use tokio::io::AsyncBufReadExt;
+        let mut reader = tokio::io::BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = reader.next_line().await {
+            let _ = app_clone.emit("install:log", line);
+        }
+    });
+
+    let status = child.wait().await.map_err(|e| e.to_string())?;
+    let _ = stdout_task.await;
+    let _ = stderr_task.await;
+
+    if !status.success() {
+        return Err("Installation script failed".into());
     }
 
     Ok(())
