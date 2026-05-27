@@ -2,21 +2,21 @@ import { useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import toast from "react-hot-toast";
-import { probeWav, startQueue, cancelQueue, checkEnvironment, initializeEnvironment } from "./lib/api";
-import { bindJobEvents } from "./lib/events";
-import type { QueueSettings, UiFileJob } from "./lib/types";
+import { probeWav, startQueue, cancelQueue, checkEnvironment, initializeEnvironment, loadModel } from "./lib/api";
+import { bindJobEvents, listenModelStatus } from "./lib/events";
+import type { ModelStatus, QueueSettings, UiFileJob } from "./lib/types";
 import { DropZone } from "./components/DropZone";
 import { FileRow } from "./components/FileRow";
 import { Settings } from "./components/Settings";
 import { QueueSummary } from "./components/QueueSummary";
 import { TitleBar } from "./components/TitleBar";
-import { Sparkles } from "lucide-react";
+import { Cpu } from "lucide-react";
 
 function basename(path: string): string {
   return path.split(/[\\/]/).pop() ?? path;
 }
 
-const defaultConcurrency = Math.max(1, Math.min(4, Math.floor((navigator.hardwareConcurrency || 4) / 2)));
+let initialCheckStarted = false;
 
 export default function App() {
   const [files, setFiles] = useState<UiFileJob[]>([]);
@@ -24,18 +24,64 @@ export default function App() {
   const [running, setRunning] = useState(false);
   const [settings, setSettings] = useState<QueueSettings>({
     outputDir: "",
-    postFilter: false,
-    concurrency: defaultConcurrency
+    postFilter: false
   });
-  const [envStatus, setEnvStatus] = useState<"checking" | "missing" | "installing" | "ready" | "error">("checking");
+  const [modelStatus, setModelStatus] = useState<ModelStatus>("checking");
+  const [modelDevice, setModelDevice] = useState<string>("");
   const [envError, setEnvError] = useState("");
 
+  // Check environment on mount, then auto-load model if env is ready
   useEffect(() => {
+    if (initialCheckStarted) return;
+    initialCheckStarted = true;
+
     checkEnvironment()
-      .then((ready) => setEnvStatus(ready ? "ready" : "missing"))
-      .catch(() => setEnvStatus("missing"));
+      .then((ready) => {
+        if (ready) {
+          setModelStatus("loading_model");
+          loadModel().catch((e) => {
+            setModelStatus("error");
+            setEnvError(String(e));
+          });
+        } else {
+          setModelStatus("not_setup");
+        }
+      })
+      .catch(() => setModelStatus("not_setup"));
   }, []);
 
+  // Listen for model status events from the Rust backend
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+
+    listenModelStatus((payload) => {
+      if (disposed) return;
+      switch (payload.status) {
+        case "loading":
+          setModelStatus("loading_model");
+          break;
+        case "ready":
+          setModelStatus("ready");
+          if (payload.device) setModelDevice(payload.device);
+          break;
+        case "error":
+          setModelStatus("error");
+          setEnvError(payload.message ?? "Unknown error");
+          break;
+      }
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlisten = fn;
+    });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  // Bind job events
   useEffect(() => {
     let disposed = false;
     let unlisteners: Array<() => void> = [];
@@ -172,7 +218,7 @@ export default function App() {
     }
     setRunning(true);
     try {
-      await startQueue({ jobs, concurrency: settings.concurrency });
+      await startQueue({ jobs });
     } catch (error) {
       toast.error(`Failed to start queue: ${String(error)}`);
       setRunning(false);
@@ -185,51 +231,82 @@ export default function App() {
     toast("Cancellation requested.");
   }
 
+  async function handleInitialize() {
+    setModelStatus("installing");
+    try {
+      await initializeEnvironment();
+      // Environment ready, now load the model
+      setModelStatus("loading_model");
+      await loadModel();
+    } catch (e: any) {
+      setModelStatus("error");
+      setEnvError(String(e));
+    }
+  }
+
+  async function handleRetryModel() {
+    setModelStatus("loading_model");
+    setEnvError("");
+    try {
+      await loadModel();
+    } catch (e: any) {
+      setModelStatus("error");
+      setEnvError(String(e));
+    }
+  }
+
   const canStart = !running && queueStats.validQueued > 0;
   const hasCompleted = files.some((f) => f.status === "done");
 
-  if (envStatus !== "ready") {
+  // ── Setup / Loading screens ────────────────────────────────────────────
+  if (modelStatus !== "ready") {
     return (
       <div className="flex h-screen flex-col overflow-hidden bg-[#09090b] text-slate-200">
         <TitleBar />
         <div className="flex flex-1 items-center justify-center">
           <div className="max-w-md w-full rounded-2xl border border-white/5 bg-zinc-900/40 p-8 shadow-2xl backdrop-blur-xl text-center">
-            <Sparkles className="w-12 h-12 mx-auto mb-4 text-purple-400" />
-          <h2 className="text-2xl font-bold mb-2">Setup Required</h2>
+          <h2 className="text-2xl font-bold mb-2">
+            {["loading_model", "checking"].includes(modelStatus) ? "Loading Model" : "Setup Required"}
+          </h2>
           <p className="text-zinc-400 mb-6">
-            To use GPU-accelerated audio processing, we need to initialize a local Python environment with PyTorch and DeepFilterNet.
+            {["loading_model", "checking"].includes(modelStatus)
+              ? "Loading DeepFilterNet3 into GPU memory. This takes a moment on first launch…"
+              : "To use GPU-accelerated audio processing, we need to initialize a local Python environment with PyTorch and DeepFilterNet."}
           </p>
-          {envStatus === "checking" && <p className="animate-pulse text-cyan-400">Checking environment...</p>}
-          {envStatus === "missing" && (
+          {modelStatus === "checking" && <p className="animate-pulse text-cyan-400">Verifying environment…</p>}
+          {modelStatus === "not_setup" && (
             <button
               className="w-full rounded-lg bg-gradient-to-r from-purple-600 to-cyan-500 py-3 font-semibold shadow-lg hover:scale-105 transition-all"
-              onClick={async () => {
-                setEnvStatus("installing");
-                try {
-                  await initializeEnvironment();
-                  setEnvStatus("ready");
-                } catch (e: any) {
-                  setEnvStatus("error");
-                  setEnvError(String(e));
-                }
-              }}
+              onClick={handleInitialize}
             >
               Initialize Environment (Takes a few minutes)
             </button>
           )}
-          {envStatus === "installing" && (
+          {modelStatus === "installing" && (
             <div className="flex flex-col gap-3">
               <div className="w-full bg-zinc-800 rounded-full h-2 overflow-hidden relative">
                 <div className="absolute inset-0 bg-gradient-to-r from-purple-500 to-cyan-500 animate-[translate_2s_linear_infinite] w-1/2"></div>
               </div>
-              <p className="text-sm text-cyan-400 animate-pulse">Installing PyTorch & DeepFilterNet...</p>
+              <p className="text-sm text-cyan-400 animate-pulse">Installing PyTorch &amp; DeepFilterNet…</p>
             </div>
           )}
-          {envStatus === "error" && (
+          {modelStatus === "loading_model" && (
+            <div className="flex flex-col gap-3 items-center">
+              <div className="relative w-16 h-16">
+                <Cpu className="w-16 h-16 text-cyan-400 animate-pulse" />
+                <div className="absolute inset-0 rounded-full bg-cyan-400/10 animate-ping" />
+              </div>
+              <p className="text-sm text-cyan-400 animate-pulse">Loading model into GPU…</p>
+            </div>
+          )}
+          {modelStatus === "error" && (
             <div className="text-left bg-rose-950/40 border border-rose-500/30 p-4 rounded-lg mt-4">
-              <p className="text-rose-400 font-bold text-sm mb-1">Setup Failed</p>
+              <p className="text-rose-400 font-bold text-sm mb-1">Failed</p>
               <pre className="text-xs text-rose-300 whitespace-pre-wrap overflow-auto max-h-48">{envError}</pre>
-              <button onClick={() => setEnvStatus("missing")} className="mt-3 text-sm underline text-zinc-400 hover:text-white">Try Again</button>
+              <div className="mt-3 flex gap-3">
+                <button onClick={() => setModelStatus("not_setup")} className="text-sm underline text-zinc-400 hover:text-white">Re-install</button>
+                <button onClick={handleRetryModel} className="text-sm underline text-cyan-400 hover:text-white">Retry Model Load</button>
+              </div>
             </div>
           )}
           </div>
@@ -238,6 +315,7 @@ export default function App() {
     );
   }
 
+  // ── Main app ───────────────────────────────────────────────────────────
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-[#09090b] text-slate-200">
       <TitleBar />
@@ -246,17 +324,23 @@ export default function App() {
           <h1 className="text-4xl font-bold tracking-tight text-white flex items-center gap-3">
             <span className="bg-gradient-to-r from-cyan-300 to-purple-400 bg-clip-text text-transparent">Bulk Audio PurifAI</span>
           </h1>
-        <div className="mt-2">
-          <QueueSummary
-            done={queueStats.done}
-            processing={queueStats.processing}
-            queued={queueStats.queued}
-            failed={queueStats.failed}
-            total={queueStats.total}
-            running={running}
-          />
-        </div>
-      </header>
+          <div className="flex items-center gap-3 mt-2">
+            <QueueSummary
+              done={queueStats.done}
+              processing={queueStats.processing}
+              queued={queueStats.queued}
+              failed={queueStats.failed}
+              total={queueStats.total}
+              running={running}
+            />
+            {modelDevice && (
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-teal-500/30 bg-teal-950/30 px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-teal-300">
+                <Cpu className="w-3 h-3" />
+                {modelDevice}
+              </span>
+            )}
+          </div>
+        </header>
 
       <div className="relative rounded-2xl border border-white/5 bg-zinc-900/40 p-5 shadow-2xl backdrop-blur-xl">
         <DropZone isDragging={isDragging} />
@@ -295,7 +379,6 @@ export default function App() {
           settings={settings}
           onChooseOutput={chooseOutputDir}
           onTogglePostFilter={() => setSettings((s) => ({ ...s, postFilter: !s.postFilter }))}
-          onConcurrencyChange={(value) => setSettings((s) => ({ ...s, concurrency: Math.max(1, Math.min(8, value || 1)) }))}
         />
       </div>
 
@@ -311,10 +394,6 @@ export default function App() {
         )}
       </section>
 
-      {/* Decorative star bottom right */}
-      <div className="fixed bottom-8 right-8 pointer-events-none opacity-20 text-zinc-400 z-0">
-        <Sparkles className="w-24 h-24" />
-      </div>
       </main>
     </div>
   );

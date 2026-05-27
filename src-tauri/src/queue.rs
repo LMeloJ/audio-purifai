@@ -9,7 +9,8 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
-use tokio::sync::Semaphore;
+
+use crate::worker::{self, EnhanceCommand};
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -26,189 +27,56 @@ pub struct JobEvent<'a> {
     pub message: Option<String>,
 }
 
+/// Process all jobs sequentially through the persistent GPU worker.
 pub async fn process_queue(
     app: AppHandle,
+    worker_state: &worker::WorkerState,
     jobs: Vec<QueueJob>,
-    concurrency: usize,
     cancel: Arc<AtomicBool>,
 ) -> Result<(), String> {
-    let limiter = Arc::new(Semaphore::new(concurrency.max(1)));
-    let mut handles = Vec::new();
-
     for job in jobs {
-        let permit = limiter
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|error| error.to_string())?;
-        let app_handle = app.clone();
-        let cancel_flag = cancel.clone();
-        handles.push(tauri::async_runtime::spawn(async move {
-            let _permit_guard = permit;
-            run_single_job(app_handle, job, cancel_flag).await
-        }));
-    }
+        if cancel.load(Ordering::Relaxed) {
+            emit_cancelled(&app, &job.id, "Cancelled before start")?;
+            continue;
+        }
 
-    for handle in handles {
-        let _ = handle.await.map_err(|error| error.to_string())?;
-    }
-    Ok(())
-}
+        app.emit(
+            "job:start",
+            JobEvent {
+                id: &job.id,
+                message: None,
+            },
+        )
+        .map_err(|e| e.to_string())?;
 
-async fn run_single_job(app: AppHandle, job: QueueJob, cancel: Arc<AtomicBool>) -> Result<(), String> {
-    if cancel.load(Ordering::Relaxed) {
-        emit_cancelled(&app, &job.id, "Cancelled before start")?;
-        return Ok(());
-    }
+        // Ensure output directory exists
+        let resolved_output = resolve_output_dir(&job.input_path, &job.output_dir)?;
+        fs::create_dir_all(&resolved_output).map_err(|e| e.to_string())?;
 
-    app.emit(
-        "job:start",
-        JobEvent {
-            id: &job.id,
-            message: None,
-        },
-    )
-    .map_err(|error| error.to_string())?;
+        // Send the enhance command to the worker
+        let cmd = EnhanceCommand {
+            cmd: "enhance".into(),
+            id: job.id.clone(),
+            input: job.input_path.clone(),
+            output_dir: resolved_output,
+            post_filter: job.post_filter,
+        };
 
-    let resolved_output = resolve_output_dir(&job.input_path, &job.output_dir)?;
-    fs::create_dir_all(&resolved_output).map_err(|error| error.to_string())?;
-    let mut args = vec!["-o".to_string(), resolved_output];
-    if job.post_filter {
-        args.push("--pf".to_string());
-    }
-    args.push(job.input_path.clone());
-
-    let bin_dir = crate::commands::get_venv_bin_dir(&app).map_err(|e| e.to_string())?;
-    let deep_filter_exe = if cfg!(target_os = "windows") {
-        bin_dir.join("deepFilter.exe")
-    } else {
-        bin_dir.join("deepFilter")
-    };
-
-    let mut child = match tokio::process::Command::new(deep_filter_exe)
-        .args(args)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(error) => {
-            let detail = if error.kind() == std::io::ErrorKind::NotFound {
-                "deepFilter not found. Please click 'Initialize Environment' first.".to_string()
-            } else {
-                error.to_string()
-            };
+        if let Err(e) = worker::send_job(worker_state, &cmd).await {
             let _ = app.emit(
                 "job:error",
                 JobEvent {
                     id: &job.id,
-                    message: Some(detail.clone()),
+                    message: Some(e.clone()),
                 },
             );
-            return Err(detail);
-        }
-    };
-
-    let stdout = child.stdout.take().ok_or("Failed to capture stdout")?;
-    let stderr = child.stderr.take().ok_or("Failed to capture stderr")?;
-
-    use tokio::io::AsyncBufReadExt;
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-
-    // Spawn a task to read stdout lines
-    let tx_out = tx.clone();
-    tokio::spawn(async move {
-        let mut reader = tokio::io::BufReader::new(stdout);
-        let mut line = String::new();
-        loop {
-            match reader.read_line(&mut line).await {
-                Ok(0) | Err(_) => break,
-                Ok(_) => {
-                    let msg = line.trim().to_string();
-                    if !msg.is_empty() {
-                        let _ = tx_out.send(msg);
-                    }
-                    line.clear();
-                }
-            }
-        }
-    });
-
-    // Spawn a task to read stderr lines
-    let tx_err = tx;
-    tokio::spawn(async move {
-        let mut reader = tokio::io::BufReader::new(stderr);
-        let mut line = String::new();
-        loop {
-            match reader.read_line(&mut line).await {
-                Ok(0) | Err(_) => break,
-                Ok(_) => {
-                    let msg = line.trim().to_string();
-                    if !msg.is_empty() {
-                        let _ = tx_err.send(msg);
-                    }
-                    line.clear();
-                }
-            }
-        }
-    });
-
-    // Drop our reference so rx closes when both tasks finish
-    let mut output_lines = Vec::new();
-
-    loop {
-        if cancel.load(Ordering::Relaxed) {
-            let _ = child.kill().await;
-            emit_cancelled(&app, &job.id, "Cancelled by user")?;
-            return Ok(());
+            return Err(e);
         }
 
-        tokio::select! {
-            msg = rx.recv() => {
-                match msg {
-                    Some(msg) => {
-                        println!("[deepFilter] {}", msg);
-                        output_lines.push(msg.clone());
-                        let _ = app.emit("job:progress", JobEvent { id: &job.id, message: Some(msg) });
-                    }
-                    None => break, // Both stdout and stderr closed
-                }
-            }
-            status = child.wait() => {
-                // Drain remaining messages
-                while let Ok(msg) = rx.try_recv() {
-                    println!("[deepFilter] {}", msg);
-                    output_lines.push(msg.clone());
-                    let _ = app.emit("job:progress", JobEvent { id: &job.id, message: Some(msg) });
-                }
-                if let Ok(status) = status {
-                    if status.success() {
-                        app.emit("job:done", JobEvent { id: &job.id, message: None })
-                            .map_err(|error| error.to_string())?;
-                    } else {
-                        let detail = output_lines.last().cloned().unwrap_or_else(|| {
-                            format!("deep-filter exited with code {:?}", status.code())
-                        });
-                        app.emit("job:error", JobEvent { id: &job.id, message: Some(detail) })
-                            .map_err(|error| error.to_string())?;
-                    }
-                }
-                return Ok(());
-            }
-        }
-    }
-
-    // Fallback if channel closed before wait finishes
-    let status = child.wait().await.map_err(|e| e.to_string())?;
-    if status.success() {
-        app.emit("job:done", JobEvent { id: &job.id, message: None })
-            .map_err(|error| error.to_string())?;
-    } else {
-        let detail = output_lines.last().cloned().unwrap_or_else(|| {
-            format!("deep-filter exited with code {:?}", status.code())
-        });
-        app.emit("job:error", JobEvent { id: &job.id, message: Some(detail) })
-            .map_err(|error| error.to_string())?;
+        // Wait briefly to give the worker time to process before sending next
+        // The actual completion is reported asynchronously via stdout_reader_loop
+        // We use a small delay to avoid flooding the worker's stdin
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 
     Ok(())

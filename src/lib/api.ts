@@ -15,6 +15,14 @@ export async function initializeEnvironment(): Promise<void> {
   return invoke("initialize_environment");
 }
 
+export async function loadModel(): Promise<void> {
+  return invoke("load_model");
+}
+
+export async function getModelStatus(): Promise<string> {
+  return invoke("get_model_status");
+}
+
 export async function probeWav(path: string): Promise<WavInfo> {
   return invoke<WavInfo>("probe_wav", { path });
 }

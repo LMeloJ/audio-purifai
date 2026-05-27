@@ -4,17 +4,15 @@ interface SettingsProps {
   settings: QueueSettings;
   onChooseOutput: () => void;
   onTogglePostFilter: () => void;
-  onConcurrencyChange: (value: number) => void;
 }
 
 export function Settings({
   settings,
   onChooseOutput,
-  onTogglePostFilter,
-  onConcurrencyChange
+  onTogglePostFilter
 }: SettingsProps) {
   return (
-    <div className="grid grid-cols-1 gap-4 rounded-xl border border-white/5 bg-black/20 p-5 md:grid-cols-3 items-end">
+    <div className="grid grid-cols-1 gap-4 rounded-xl border border-white/5 bg-black/20 p-5 md:grid-cols-2 items-end">
       <div>
         <p className="mb-2 text-xs font-semibold tracking-wider text-zinc-500 uppercase">Output directory</p>
         <button
@@ -36,20 +34,6 @@ export function Settings({
               }`}
             />
           </div>
-        </label>
-      </div>
-      <div>
-        <label className="flex flex-col text-xs font-semibold tracking-wider text-zinc-500 uppercase">
-          <span className="mb-2">Concurrency</span>
-          <select
-            className="w-full appearance-none rounded-lg border border-white/10 bg-zinc-900 px-4 py-2.5 text-sm text-zinc-200 outline-none transition-all focus:border-cyan-500/50 focus:ring-1 focus:ring-cyan-500/50 hover:bg-zinc-800"
-            value={settings.concurrency}
-            onChange={(event) => onConcurrencyChange(Number(event.target.value))}
-          >
-            {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
-              <option key={n} value={n}>{n}</option>
-            ))}
-          </select>
         </label>
       </div>
     </div>

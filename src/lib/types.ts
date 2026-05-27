@@ -1,5 +1,7 @@
 export type JobStatus = "queued" | "processing" | "done" | "error" | "cancelled";
 
+export type ModelStatus = "checking" | "not_setup" | "installing" | "loading_model" | "ready" | "error";
+
 export interface UiFileJob {
   id: string;
   path: string;
@@ -15,7 +17,6 @@ export interface UiFileJob {
 export interface QueueSettings {
   outputDir: string;
   postFilter: boolean;
-  concurrency: number;
 }
 
 export interface QueueStartPayload {
@@ -25,5 +26,10 @@ export interface QueueStartPayload {
     outputDir: string;
     postFilter: boolean;
   }>;
-  concurrency: number;
+}
+
+export interface ModelStatusPayload {
+  status: string;
+  message?: string;
+  device?: string;
 }

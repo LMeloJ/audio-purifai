@@ -5,13 +5,26 @@ use std::sync::{
 
 use tauri::{AppHandle, State};
 
-use crate::{audio, queue, QueueState};
+use crate::{queue, worker, AppState};
 use std::path::PathBuf;
 use tauri::Manager;
 
 pub fn get_venv_bin_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let app_dir = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
-    let venv_dir = app_dir.join(".venv");
+    let mut venv_dir = app
+        .path()
+        .app_local_data_dir()
+        .map(|dir| dir.join(".venv"))
+        .unwrap_or_default();
+
+    // Fallback for dev mode: check current directory
+    if !venv_dir.exists() {
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let fallback = cwd.join(".venv");
+        if fallback.exists() {
+            venv_dir = fallback;
+        }
+    }
+
     if cfg!(target_os = "windows") {
         Ok(venv_dir.join("Scripts"))
     } else {
@@ -22,7 +35,11 @@ pub fn get_venv_bin_dir(app: &AppHandle) -> Result<PathBuf, String> {
 #[tauri::command]
 pub fn check_environment(app: AppHandle) -> Result<bool, String> {
     let bin_dir = get_venv_bin_dir(&app)?;
-    let exe_name = if cfg!(target_os = "windows") { "deepFilter.exe" } else { "deepFilter" };
+    let exe_name = if cfg!(target_os = "windows") {
+        "python.exe"
+    } else {
+        "python"
+    };
     Ok(bin_dir.join(exe_name).exists())
 }
 
@@ -31,19 +48,27 @@ pub async fn initialize_environment(app: AppHandle) -> Result<(), String> {
     let app_dir = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&app_dir).map_err(|e| e.to_string())?;
 
-    let script_name = if cfg!(target_os = "windows") { "setup-env.ps1" } else { "setup-env.sh" };
-    
-    // In Tauri v2, app.path().resolve with BaseDirectory::Resource is the robust way to find resources.
-    let mut script_path = app.path().resolve(
-        format!("scripts/{}", script_name), 
-        tauri::path::BaseDirectory::Resource
-    ).unwrap_or_else(|_| {
-        // Fallback for some dev environments if resolve fails
-        app.path().resource_dir().unwrap().join("scripts").join(script_name)
-    });
+    let script_name = if cfg!(target_os = "windows") {
+        "setup-env.ps1"
+    } else {
+        "setup-env.sh"
+    };
+
+    let mut script_path = app
+        .path()
+        .resolve(
+            format!("scripts/{}", script_name),
+            tauri::path::BaseDirectory::Resource,
+        )
+        .unwrap_or_else(|_| {
+            app.path()
+                .resource_dir()
+                .unwrap()
+                .join("scripts")
+                .join(script_name)
+        });
 
     if !script_path.exists() {
-        // Fallback for dev mode where resources might not be copied to target/debug
         let current_dir = std::env::current_dir().unwrap_or_default();
         let fallback = current_dir.join("..").join("scripts").join(script_name);
         if fallback.exists() {
@@ -51,24 +76,29 @@ pub async fn initialize_environment(app: AppHandle) -> Result<(), String> {
         }
     }
 
-    let output = if cfg!(target_os = "windows") {
-        tokio::process::Command::new("powershell")
-            .arg("-ExecutionPolicy")
+    let mut cmd = if cfg!(target_os = "windows") {
+        let mut c = tokio::process::Command::new("powershell");
+        c.arg("-ExecutionPolicy")
             .arg("Bypass")
             .arg("-File")
             .arg(&script_path)
-            .current_dir(&app_dir)
-            .output()
-            .await
-            .map_err(|e| e.to_string())?
+            .current_dir(&app_dir);
+        c
     } else {
-        tokio::process::Command::new("bash")
-            .arg(&script_path)
-            .current_dir(&app_dir)
-            .output()
-            .await
-            .map_err(|e| e.to_string())?
+        let mut c = tokio::process::Command::new("bash");
+        c.arg(&script_path).current_dir(&app_dir);
+        c
     };
+
+    // Hide console window on Windows
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let output = cmd.output().await.map_err(|e| e.to_string())?;
 
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).to_string());
@@ -78,30 +108,58 @@ pub async fn initialize_environment(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn probe_wav(path: String) -> Result<audio::WavInfo, String> {
-    audio::probe_wav(&path)
+pub async fn load_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    worker::spawn_worker(app, &state.worker).await
+}
+
+#[tauri::command]
+pub async fn get_model_status(state: State<'_, AppState>) -> Result<String, String> {
+    if worker::is_ready(&state.worker).await {
+        Ok("ready".into())
+    } else {
+        Ok("not_loaded".into())
+    }
+}
+
+#[tauri::command]
+pub fn probe_wav(path: String) -> Result<crate::audio::WavInfo, String> {
+    crate::audio::probe_wav(&path)
 }
 
 #[tauri::command]
 pub async fn start_queue(
     app: AppHandle,
-    state: State<'_, QueueState>,
+    state: State<'_, AppState>,
     jobs: Vec<queue::QueueJob>,
-    concurrency: usize,
 ) -> Result<(), String> {
     let cancel_flag = Arc::new(AtomicBool::new(false));
     {
         let mut guard = state.cancel_flag.lock().await;
         *guard = Some(cancel_flag.clone());
     }
-    tauri::async_runtime::spawn(async move {
-        let _ = queue::process_queue(app, jobs, concurrency, cancel_flag).await;
-    });
+    let worker_state = &state.worker;
+
+    // Verify worker is ready before starting
+    if !worker::is_ready(worker_state).await {
+        return Err("Model is not loaded. Please wait for it to finish loading.".into());
+    }
+
+    // We need to clone what we need for the spawned task
+    let app_clone = app.clone();
+    let cancel_clone = cancel_flag.clone();
+
+    // We can't move worker_state into the spawn, so we process inline
+    // but wrap it in a spawn to avoid blocking the command
+    let _ = queue::process_queue(app_clone, worker_state, jobs, cancel_clone).await;
+
     Ok(())
 }
 
 #[tauri::command]
-pub async fn cancel_queue(state: State<'_, QueueState>) -> Result<(), String> {
+pub async fn cancel_queue(state: State<'_, AppState>) -> Result<(), String> {
     let guard = state.cancel_flag.lock().await;
     if let Some(flag) = guard.as_ref() {
         flag.store(true, Ordering::Relaxed);

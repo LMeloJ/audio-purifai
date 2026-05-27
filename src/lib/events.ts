@@ -1,4 +1,5 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { ModelStatusPayload } from "./types";
 
 export interface JobEventPayload {
   id: string;
@@ -27,4 +28,10 @@ export async function bindJobEvents(
       listen<JobEventPayload>(eventName, (event) => handler(event.payload))
     )
   );
+}
+
+export async function listenModelStatus(
+  handler: (payload: ModelStatusPayload) => void
+): Promise<UnlistenFn> {
+  return listen<ModelStatusPayload>("model:status", (event) => handler(event.payload));
 }
