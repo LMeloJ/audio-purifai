@@ -70,10 +70,22 @@ pub async fn initialize_environment(app: AppHandle) -> Result<(), String> {
 
     if !script_path.exists() {
         let current_dir = std::env::current_dir().unwrap_or_default();
-        let fallback = current_dir.join("..").join("scripts").join(script_name);
-        if fallback.exists() {
-            script_path = fallback;
+        let fallback_root = current_dir.join("scripts").join(script_name);
+        let fallback_tauri = current_dir.join("..").join("scripts").join(script_name);
+        
+        if fallback_root.exists() {
+            script_path = fallback_root;
+        } else if fallback_tauri.exists() {
+            script_path = fallback_tauri;
+        } else {
+            return Err(format!("{} not found. Searched: {:?} and {:?}", script_name, fallback_root, fallback_tauri));
         }
+    }
+
+    // PowerShell's -File parameter chokes on Windows extended-length paths (\\?\)
+    let mut script_path_str = script_path.to_string_lossy().to_string();
+    if script_path_str.starts_with("\\\\?\\") {
+        script_path_str = script_path_str[4..].to_string();
     }
 
     let mut cmd = if cfg!(target_os = "windows") {
@@ -81,12 +93,12 @@ pub async fn initialize_environment(app: AppHandle) -> Result<(), String> {
         c.arg("-ExecutionPolicy")
             .arg("Bypass")
             .arg("-File")
-            .arg(&script_path)
+            .arg(&script_path_str)
             .current_dir(&app_dir);
         c
     } else {
         let mut c = tokio::process::Command::new("bash");
-        c.arg(&script_path).current_dir(&app_dir);
+        c.arg(&script_path_str).current_dir(&app_dir);
         c
     };
 
