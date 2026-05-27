@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import toast from "react-hot-toast";
-import { probeWav, startQueue, cancelQueue } from "./lib/api";
+import { probeWav, startQueue, cancelQueue, checkEnvironment, initializeEnvironment } from "./lib/api";
 import { bindJobEvents } from "./lib/events";
 import type { QueueSettings, UiFileJob } from "./lib/types";
 import { DropZone } from "./components/DropZone";
@@ -27,6 +27,14 @@ export default function App() {
     postFilter: false,
     concurrency: defaultConcurrency
   });
+  const [envStatus, setEnvStatus] = useState<"checking" | "missing" | "installing" | "ready" | "error">("checking");
+  const [envError, setEnvError] = useState("");
+
+  useEffect(() => {
+    checkEnvironment()
+      .then((ready) => setEnvStatus(ready ? "ready" : "missing"))
+      .catch(() => setEnvStatus("missing"));
+  }, []);
 
   useEffect(() => {
     let disposed = false;
@@ -35,6 +43,8 @@ export default function App() {
     bindJobEvents({
       onStart: ({ id }) =>
         setFiles((items) => items.map((item) => (item.id === id ? { ...item, status: "processing", message: undefined } : item))),
+      onProgress: ({ id, message }) =>
+        setFiles((items) => items.map((item) => (item.id === id ? { ...item, message } : item))),
       onDone: ({ id }) =>
         setFiles((items) => items.map((item) => (item.id === id ? { ...item, status: "done", message: undefined } : item))),
       onError: ({ id, message }) =>
@@ -177,6 +187,56 @@ export default function App() {
 
   const canStart = !running && queueStats.validQueued > 0;
   const hasCompleted = files.some((f) => f.status === "done");
+
+  if (envStatus !== "ready") {
+    return (
+      <div className="flex h-screen flex-col overflow-hidden bg-[#09090b] text-slate-200">
+        <TitleBar />
+        <div className="flex flex-1 items-center justify-center">
+          <div className="max-w-md w-full rounded-2xl border border-white/5 bg-zinc-900/40 p-8 shadow-2xl backdrop-blur-xl text-center">
+            <Sparkles className="w-12 h-12 mx-auto mb-4 text-purple-400" />
+          <h2 className="text-2xl font-bold mb-2">Setup Required</h2>
+          <p className="text-zinc-400 mb-6">
+            To use GPU-accelerated audio processing, we need to initialize a local Python environment with PyTorch and DeepFilterNet.
+          </p>
+          {envStatus === "checking" && <p className="animate-pulse text-cyan-400">Checking environment...</p>}
+          {envStatus === "missing" && (
+            <button
+              className="w-full rounded-lg bg-gradient-to-r from-purple-600 to-cyan-500 py-3 font-semibold shadow-lg hover:scale-105 transition-all"
+              onClick={async () => {
+                setEnvStatus("installing");
+                try {
+                  await initializeEnvironment();
+                  setEnvStatus("ready");
+                } catch (e: any) {
+                  setEnvStatus("error");
+                  setEnvError(String(e));
+                }
+              }}
+            >
+              Initialize Environment (Takes a few minutes)
+            </button>
+          )}
+          {envStatus === "installing" && (
+            <div className="flex flex-col gap-3">
+              <div className="w-full bg-zinc-800 rounded-full h-2 overflow-hidden relative">
+                <div className="absolute inset-0 bg-gradient-to-r from-purple-500 to-cyan-500 animate-[translate_2s_linear_infinite] w-1/2"></div>
+              </div>
+              <p className="text-sm text-cyan-400 animate-pulse">Installing PyTorch & DeepFilterNet...</p>
+            </div>
+          )}
+          {envStatus === "error" && (
+            <div className="text-left bg-rose-950/40 border border-rose-500/30 p-4 rounded-lg mt-4">
+              <p className="text-rose-400 font-bold text-sm mb-1">Setup Failed</p>
+              <pre className="text-xs text-rose-300 whitespace-pre-wrap overflow-auto max-h-48">{envError}</pre>
+              <button onClick={() => setEnvStatus("missing")} className="mt-3 text-sm underline text-zinc-400 hover:text-white">Try Again</button>
+            </div>
+          )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-[#09090b] text-slate-200">

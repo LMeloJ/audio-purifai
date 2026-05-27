@@ -16,3 +16,9 @@ src-tauri/target/
 *.njsproj
 *.sln
 *.sw?
+
+# Test audio files
+*.wav
+
+# Rust installer
+rustup-init.exe

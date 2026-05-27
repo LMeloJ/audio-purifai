@@ -8,6 +8,7 @@ export interface JobEventPayload {
 export async function bindJobEvents(
   handlers: {
     onStart: (payload: JobEventPayload) => void;
+    onProgress: (payload: JobEventPayload) => void;
     onDone: (payload: JobEventPayload) => void;
     onError: (payload: JobEventPayload) => void;
     onCancelled: (payload: JobEventPayload) => void;
@@ -15,6 +16,7 @@ export async function bindJobEvents(
 ): Promise<UnlistenFn[]> {
   const events: Array<[string, (payload: JobEventPayload) => void]> = [
     ["job:start", handlers.onStart],
+    ["job:progress", handlers.onProgress],
     ["job:done", handlers.onDone],
     ["job:error", handlers.onError],
     ["job:cancelled", handlers.onCancelled]

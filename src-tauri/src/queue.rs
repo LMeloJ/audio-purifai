@@ -9,7 +9,6 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
-use tauri_plugin_shell::{process::CommandEvent, ShellExt};
 use tokio::sync::Semaphore;
 
 #[derive(Clone, Debug, Deserialize)]
@@ -79,56 +78,137 @@ async fn run_single_job(app: AppHandle, job: QueueJob, cancel: Arc<AtomicBool>) 
     }
     args.push(job.input_path.clone());
 
-    let sidecar = app
-        .shell()
-        .sidecar("deep-filter")
-        .map_err(|error| error.to_string())?
-        .args(args);
+    let bin_dir = crate::commands::get_venv_bin_dir(&app).map_err(|e| e.to_string())?;
+    let deep_filter_exe = if cfg!(target_os = "windows") {
+        bin_dir.join("deepFilter.exe")
+    } else {
+        bin_dir.join("deepFilter")
+    };
 
-    let (mut rx, child) = sidecar.spawn().map_err(|error| error.to_string())?;
-    let mut stderr_lines = Vec::new();
+    let mut child = match tokio::process::Command::new(deep_filter_exe)
+        .args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            let detail = if error.kind() == std::io::ErrorKind::NotFound {
+                "deepFilter not found. Please click 'Initialize Environment' first.".to_string()
+            } else {
+                error.to_string()
+            };
+            let _ = app.emit(
+                "job:error",
+                JobEvent {
+                    id: &job.id,
+                    message: Some(detail.clone()),
+                },
+            );
+            return Err(detail);
+        }
+    };
 
-    while let Some(event) = rx.recv().await {
+    let stdout = child.stdout.take().ok_or("Failed to capture stdout")?;
+    let stderr = child.stderr.take().ok_or("Failed to capture stderr")?;
+
+    use tokio::io::AsyncBufReadExt;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
+    // Spawn a task to read stdout lines
+    let tx_out = tx.clone();
+    tokio::spawn(async move {
+        let mut reader = tokio::io::BufReader::new(stdout);
+        let mut line = String::new();
+        loop {
+            match reader.read_line(&mut line).await {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    let msg = line.trim().to_string();
+                    if !msg.is_empty() {
+                        let _ = tx_out.send(msg);
+                    }
+                    line.clear();
+                }
+            }
+        }
+    });
+
+    // Spawn a task to read stderr lines
+    let tx_err = tx;
+    tokio::spawn(async move {
+        let mut reader = tokio::io::BufReader::new(stderr);
+        let mut line = String::new();
+        loop {
+            match reader.read_line(&mut line).await {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    let msg = line.trim().to_string();
+                    if !msg.is_empty() {
+                        let _ = tx_err.send(msg);
+                    }
+                    line.clear();
+                }
+            }
+        }
+    });
+
+    // Drop our reference so rx closes when both tasks finish
+    let mut output_lines = Vec::new();
+
+    loop {
         if cancel.load(Ordering::Relaxed) {
-            let _ = child.kill();
+            let _ = child.kill().await;
             emit_cancelled(&app, &job.id, "Cancelled by user")?;
             return Ok(());
         }
 
-        match event {
-            CommandEvent::Stderr(line) => {
-                let msg = String::from_utf8_lossy(&line).trim().to_string();
-                if !msg.is_empty() {
-                    stderr_lines.push(msg);
+        tokio::select! {
+            msg = rx.recv() => {
+                match msg {
+                    Some(msg) => {
+                        println!("[deepFilter] {}", msg);
+                        output_lines.push(msg.clone());
+                        let _ = app.emit("job:progress", JobEvent { id: &job.id, message: Some(msg) });
+                    }
+                    None => break, // Both stdout and stderr closed
                 }
             }
-            CommandEvent::Terminated(status) => {
-                if status.code == Some(0) {
-                    app.emit(
-                        "job:done",
-                        JobEvent {
-                            id: &job.id,
-                            message: None,
-                        },
-                    )
-                    .map_err(|error| error.to_string())?;
-                } else {
-                    let detail = stderr_lines.last().cloned().unwrap_or_else(|| {
-                        format!("deep-filter exited with code {:?}", status.code)
-                    });
-                    app.emit(
-                        "job:error",
-                        JobEvent {
-                            id: &job.id,
-                            message: Some(detail),
-                        },
-                    )
-                    .map_err(|error| error.to_string())?;
+            status = child.wait() => {
+                // Drain remaining messages
+                while let Ok(msg) = rx.try_recv() {
+                    println!("[deepFilter] {}", msg);
+                    output_lines.push(msg.clone());
+                    let _ = app.emit("job:progress", JobEvent { id: &job.id, message: Some(msg) });
                 }
-                break;
+                if let Ok(status) = status {
+                    if status.success() {
+                        app.emit("job:done", JobEvent { id: &job.id, message: None })
+                            .map_err(|error| error.to_string())?;
+                    } else {
+                        let detail = output_lines.last().cloned().unwrap_or_else(|| {
+                            format!("deep-filter exited with code {:?}", status.code())
+                        });
+                        app.emit("job:error", JobEvent { id: &job.id, message: Some(detail) })
+                            .map_err(|error| error.to_string())?;
+                    }
+                }
+                return Ok(());
             }
-            _ => {}
         }
+    }
+
+    // Fallback if channel closed before wait finishes
+    let status = child.wait().await.map_err(|e| e.to_string())?;
+    if status.success() {
+        app.emit("job:done", JobEvent { id: &job.id, message: None })
+            .map_err(|error| error.to_string())?;
+    } else {
+        let detail = output_lines.last().cloned().unwrap_or_else(|| {
+            format!("deep-filter exited with code {:?}", status.code())
+        });
+        app.emit("job:error", JobEvent { id: &job.id, message: Some(detail) })
+            .map_err(|error| error.to_string())?;
     }
 
     Ok(())

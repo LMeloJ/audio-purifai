@@ -40,13 +40,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
-      - name: Fetch DeepFilterNet binaries (Linux/macOS shell)
-        if: runner.os != 'Windows'
-        run: bash ./scripts/fetch-binaries.sh
-
-      - name: Fetch DeepFilterNet binaries (PowerShell)
-        if: runner.os == 'Windows'
-        run: pwsh ./scripts/fetch-binaries.ps1
 
       - name: Build Tauri bundle
         run: pnpm tauri build

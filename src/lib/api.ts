@@ -7,6 +7,14 @@ export interface WavInfo {
   channels: number;
 }
 
+export async function checkEnvironment(): Promise<boolean> {
+  return invoke("check_environment");
+}
+
+export async function initializeEnvironment(): Promise<void> {
+  return invoke("initialize_environment");
+}
+
 export async function probeWav(path: string): Promise<WavInfo> {
   return invoke<WavInfo>("probe_wav", { path });
 }

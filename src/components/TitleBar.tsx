@@ -1,6 +1,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Minus, Square, X } from "lucide-react";
 import { useState, useEffect } from "react";
+import toast from "react-hot-toast";
 // @ts-ignore - Vite handles png imports but tsc doesn't know about it
 import logoUrl from "../../images/logo-icon-square.png";
 
@@ -11,18 +12,35 @@ export function TitleBar() {
   useEffect(() => {
     let unlisten: () => void;
     appWindow.onResized(async () => {
-      setIsMaximized(await appWindow.isMaximized());
+      try {
+        setIsMaximized(await appWindow.isMaximized());
+      } catch (e) {}
     }).then((fn: () => void) => {
       unlisten = fn;
-    });
+    }).catch(err => console.error("onResized error", err));
     return () => {
       if (unlisten) unlisten();
     };
   }, [appWindow]);
 
+  const handleAction = async (action: 'minimize' | 'maximize' | 'close') => {
+    try {
+      if (action === 'minimize') await appWindow.minimize();
+      else if (action === 'maximize') await appWindow.toggleMaximize();
+      else if (action === 'close') await appWindow.close();
+    } catch (err) {
+      toast.error(`Window ${action} failed: ${err}`);
+    }
+  };
+
   return (
     <div
-      data-tauri-drag-region
+      onPointerDown={(e) => {
+        // Only start dragging if we didn't click a button inside
+        if (!(e.target as HTMLElement).closest('button')) {
+          appWindow.startDragging().catch(err => toast.error(`Drag failed: ${err}`));
+        }
+      }}
       className="flex h-10 shrink-0 select-none items-center justify-between bg-zinc-950/80 px-4 backdrop-blur-md border-b border-white/5"
     >
       {/* Brand */}
@@ -40,21 +58,21 @@ export function TitleBar() {
       <div className="flex items-center gap-1">
         <button
           className="inline-flex h-7 w-7 items-center justify-center rounded text-zinc-400 hover:bg-white/10 hover:text-zinc-100 transition-colors"
-          onClick={() => appWindow.minimize()}
+          onClick={() => handleAction('minimize')}
           title="Minimize"
         >
           <Minus className="h-4 w-4" />
         </button>
         <button
           className="inline-flex h-7 w-7 items-center justify-center rounded text-zinc-400 hover:bg-white/10 hover:text-zinc-100 transition-colors"
-          onClick={() => appWindow.toggleMaximize()}
+          onClick={() => handleAction('maximize')}
           title="Maximize"
         >
           <Square className="h-3 w-3" />
         </button>
         <button
           className="inline-flex h-7 w-7 items-center justify-center rounded text-zinc-400 hover:bg-red-500/20 hover:text-red-400 transition-colors"
-          onClick={() => appWindow.close()}
+          onClick={() => handleAction('close')}
           title="Close"
         >
           <X className="h-4 w-4" />

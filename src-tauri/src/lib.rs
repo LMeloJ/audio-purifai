@@ -17,6 +17,8 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .manage(QueueState::default())
         .invoke_handler(tauri::generate_handler![
+            commands::check_environment,
+            commands::initialize_environment,
             commands::probe_wav,
             commands::start_queue,
             commands::cancel_queue
