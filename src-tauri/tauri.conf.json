@@ -37,7 +37,6 @@
     "resources": {
       "../scripts": "scripts"
     },
-    "externalBin": ["binaries/deep-filter"],
     "windows": {
       "nsis": {
         "installMode": "perMachine",
