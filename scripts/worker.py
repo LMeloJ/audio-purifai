@@ -49,7 +49,9 @@ def main():
         
         # Force DeepFilterNet and PyTorch to use a local cache directory
         # to avoid polluting the user's global AppData folder.
-        local_cache = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".venv", "df_cache")
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        app_root = os.path.dirname(script_dir)
+        local_cache = os.path.join(app_root, ".venv", "df_cache")
         os.makedirs(local_cache, exist_ok=True)
         os.environ["TORCH_HOME"] = local_cache
         
