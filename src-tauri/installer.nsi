@@ -495,7 +495,13 @@ Function .onInit
   ${If} $INSTDIR == "${PLACEHOLDER_INSTALL_DIR}"
     ; Set default install location — default to C:\Users\Public for shared access
     !if "${INSTALLMODE}" == "perMachine"
-      StrCpy $INSTDIR "$PROFILE\..\Public\${PRODUCTNAME}"
+      ReadEnvStr $0 PUBLIC
+      ${If} $0 != ""
+        StrCpy $INSTDIR "$0\${PRODUCTNAME}"
+      ${Else}
+        System::Call 'kernel32::GetFullPathName(t "$PROFILE\..\Public\${PRODUCTNAME}", i ${NSIS_MAX_STRLEN}, t .r1, p 0)'
+        StrCpy $INSTDIR $1
+      ${EndIf}
     !else if "${INSTALLMODE}" == "currentUser"
       StrCpy $INSTDIR "$LOCALAPPDATA\${PRODUCTNAME}"
     !endif
@@ -883,7 +889,22 @@ SectionEnd
 
 Function RestorePreviousInstallLocation
   ReadRegStr $4 SHCTX "${MANUPRODUCTKEY}" ""
-  StrCmp $4 "" +2 0
+  StrCmp $4 "" 0 has_previous
+    ; No previous installation, set custom default based on selection
+    ${If} $MultiUser.InstallMode == "AllUsers"
+      ReadEnvStr $0 PUBLIC
+      ${If} $0 != ""
+        StrCpy $INSTDIR "$0\${PRODUCTNAME}"
+      ${Else}
+        ; Fallback, resolve .. properly
+        System::Call 'kernel32::GetFullPathName(t "$PROFILE\..\Public\${PRODUCTNAME}", i ${NSIS_MAX_STRLEN}, t .r1, p 0)'
+        StrCpy $INSTDIR $1
+      ${EndIf}
+    ${Else}
+      StrCpy $INSTDIR "$LOCALAPPDATA\${PRODUCTNAME}"
+    ${EndIf}
+    Return
+  has_previous:
     StrCpy $INSTDIR $4
 FunctionEnd
 
