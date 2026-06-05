@@ -58,8 +58,8 @@ def main():
 
         from df.enhance import init_df, enhance
         from df.io import load_audio, save_audio
-    except ImportError as e:
-        emit({"status": "error", "message": f"Missing dependency: {e}"})
+    except Exception as e:
+        emit({"status": "error", "message": f"Failed to initialize Python environment: {e}\n{traceback.format_exc()}"})
         sys.exit(1)
 
     # Load model into GPU (or CPU as fallback)
