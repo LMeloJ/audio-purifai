@@ -22,3 +22,10 @@ src-tauri/target/
 
 # Rust installer
 rustup-init.exe
+
+# Local binaries and environments
+.venv/
+ffmpeg_bin/
+uv_bin/
+uv_python/
+uv_cache/

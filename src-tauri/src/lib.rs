@@ -33,6 +33,8 @@ pub fn run() {
             commands::load_model,
             commands::get_model_status,
             commands::probe_wav,
+            commands::probe_media,
+            commands::check_ffmpeg,
             commands::start_queue,
             commands::cancel_queue
         ])

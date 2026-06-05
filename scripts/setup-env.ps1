@@ -12,6 +12,27 @@ if (-not (Get-Command uv -ErrorAction Ignore)) {
     $UvExe = Join-Path $env:UV_INSTALL_DIR "uv.exe"
 }
 
+# ── FFmpeg ──────────────────────────────────────────────
+$FfmpegDir = Join-Path $AppDir "ffmpeg_bin"
+$FfmpegExe = Join-Path $FfmpegDir "ffmpeg.exe"
+if (-not (Test-Path $FfmpegExe)) {
+    Write-Host "Downloading FFmpeg..."
+    $FfmpegZip = Join-Path $AppDir "ffmpeg.zip"
+    $FfmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+    Invoke-WebRequest -Uri $FfmpegUrl -OutFile $FfmpegZip
+    Expand-Archive -Path $FfmpegZip -DestinationPath $FfmpegDir -Force
+    # Move binaries from nested folder to ffmpeg_bin root
+    $Nested = Get-ChildItem $FfmpegDir -Directory | Select-Object -First 1
+    if ($Nested) {
+        Move-Item (Join-Path $Nested.FullName "bin\*") $FfmpegDir -Force
+        Remove-Item $Nested.FullName -Recurse -Force
+    }
+    Remove-Item $FfmpegZip -Force
+    Write-Host "FFmpeg installed to $FfmpegDir"
+} else {
+    Write-Host "FFmpeg already present."
+}
+
 Write-Host "Creating local virtual environment (.venv)..."
 & $UvExe venv --python 3.11
 

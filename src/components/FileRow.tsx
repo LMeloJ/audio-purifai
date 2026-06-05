@@ -1,4 +1,4 @@
-import type { JobStatus, UiFileJob } from "../lib/types";
+import type { JobStatus, MediaType, UiFileJob } from "../lib/types";
 import { formatDuration } from "../lib/format";
 
 interface FileRowProps {
@@ -22,15 +22,28 @@ const statusClass: Record<JobStatus, string> = {
   cancelled: "bg-amber-950 border border-amber-500/50 text-amber-300"
 };
 
+const mediaTypeBadge: Record<MediaType, { label: string; icon: string; className: string }> = {
+  wav: { label: "WAV", icon: "🎵", className: "border-sky-500/30 bg-sky-950/30 text-sky-300" },
+  mp3: { label: "MP3", icon: "🎵", className: "border-violet-500/30 bg-violet-950/30 text-violet-300" },
+  mp4: { label: "MP4", icon: "🎬", className: "border-amber-500/30 bg-amber-950/30 text-amber-300" },
+};
+
 export function FileRow({ file, onRemove }: FileRowProps) {
+  const badge = mediaTypeBadge[file.mediaType] ?? mediaTypeBadge.wav;
+
   return (
     <div className="group rounded-xl border border-white/5 bg-zinc-900/40 p-4 transition-all hover:bg-zinc-800/60 hover:border-white/10">
       <div className="flex items-center justify-between gap-4">
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium text-cyan-100/90">{file.name}</p>
+          <div className="flex items-center gap-2">
+            <span className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${badge.className}`}>
+              {badge.icon} {badge.label}
+            </span>
+            <p className="truncate text-sm font-medium text-cyan-100/90">{file.name}</p>
+          </div>
           <p className="mt-1 text-[11px] font-medium tracking-wide text-zinc-500">
-            {file.sampleRate ? `${file.sampleRate} Hz` : "Unknown rate"}
-            {file.durationSec !== undefined ? ` · ${formatDuration(file.durationSec)}` : ""}
+            {file.sampleRate ? `${file.sampleRate} Hz` : ""}
+            {file.durationSec !== undefined ? `${file.sampleRate ? " · " : ""}${formatDuration(file.durationSec)}` : ""}
           </p>
           {file.message && <p className="mt-1 text-xs text-rose-400">{file.message}</p>}
         </div>

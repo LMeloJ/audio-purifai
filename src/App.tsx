@@ -2,9 +2,9 @@ import { useEffect, useMemo, useState, useRef } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import toast from "react-hot-toast";
-import { probeWav, startQueue, cancelQueue, checkEnvironment, initializeEnvironment, loadModel } from "./lib/api";
+import { probeMedia, startQueue, cancelQueue, checkEnvironment, initializeEnvironment, loadModel } from "./lib/api";
 import { bindJobEvents, listenModelStatus, listenInstallLog } from "./lib/events";
-import type { ModelStatus, QueueSettings, UiFileJob } from "./lib/types";
+import type { MediaType, ModelStatus, QueueSettings, UiFileJob } from "./lib/types";
 import { DropZone } from "./components/DropZone";
 import { FileRow } from "./components/FileRow";
 import { Settings } from "./components/Settings";
@@ -12,8 +12,21 @@ import { QueueSummary } from "./components/QueueSummary";
 import { TitleBar } from "./components/TitleBar";
 import { Cpu } from "lucide-react";
 
+const SUPPORTED_EXTENSIONS = ["wav", "mp3", "mp4"];
+
 function basename(path: string): string {
   return path.split(/[\\/]/).pop() ?? path;
+}
+
+function getExtension(path: string): string {
+  return path.split(".").pop()?.toLowerCase() ?? "";
+}
+
+function getMediaType(path: string): MediaType {
+  const ext = getExtension(path);
+  if (ext === "mp3") return "mp3";
+  if (ext === "mp4") return "mp4";
+  return "wav";
 }
 
 let initialCheckStarted = false;
@@ -138,7 +151,7 @@ export default function App() {
     const processing = files.filter((f) => f.status === "processing").length;
     const queued = files.filter((f) => f.status === "queued").length;
     const failed = files.filter((f) => f.status === "error" || f.status === "cancelled").length;
-    const validQueued = files.filter((f) => f.status === "queued" && f.validWav).length;
+    const validQueued = files.filter((f) => f.status === "queued" && f.validFile).length;
     return { done, processing, queued, failed, total: files.length, validQueued };
   }, [files]);
 
@@ -157,26 +170,34 @@ export default function App() {
   }, [files, running, queueStats]);
 
   async function addPaths(paths: string[]) {
-    const wavPaths = paths.filter((path) => path.toLowerCase().endsWith(".wav"));
-    if (wavPaths.length !== paths.length) {
-      toast.error("Only WAV files are supported.");
+    const supportedPaths = paths.filter((path) => {
+      const ext = getExtension(path);
+      return SUPPORTED_EXTENSIONS.includes(ext);
+    });
+    if (supportedPaths.length !== paths.length) {
+      const skipped = paths.length - supportedPaths.length;
+      toast.error(`${skipped} file(s) skipped — only WAV, MP3, and MP4 are supported.`);
     }
     const additions: UiFileJob[] = [];
-    for (const path of wavPaths) {
+    for (const path of supportedPaths) {
       const id = crypto.randomUUID();
+      const mediaType = getMediaType(path);
       try {
-        const info = await probeWav(path);
-        const valid = info.sampleRate === 48_000;
+        const info = await probeMedia(path);
+        const valid = info.hasAudio;
         additions.push({
           id,
           path,
           name: basename(path),
           sizeBytes: 0,
           durationSec: info.durationSec,
-          sampleRate: info.sampleRate,
-          validWav: valid,
+          sampleRate: info.sampleRate ?? undefined,
+          mediaType,
+          validFile: valid,
+          hasAudio: info.hasAudio,
+          hasVideo: info.hasVideo,
           status: "queued",
-          message: valid ? undefined : "Expected 48kHz WAV"
+          message: valid ? undefined : "No audio track found"
         });
       } catch {
         additions.push({
@@ -184,9 +205,12 @@ export default function App() {
           path,
           name: basename(path),
           sizeBytes: 0,
-          validWav: false,
+          mediaType,
+          validFile: false,
+          hasAudio: false,
+          hasVideo: false,
           status: "error",
-          message: "Invalid WAV file"
+          message: "Could not read file"
         });
       }
     }
@@ -194,7 +218,12 @@ export default function App() {
   }
 
   async function chooseFiles() {
-    const selected = await open({ multiple: true, filters: [{ name: "WAV Audio", extensions: ["wav"] }] });
+    const selected = await open({
+      multiple: true,
+      filters: [
+        { name: "Audio / Video", extensions: ["wav", "mp3", "mp4"] }
+      ]
+    });
     if (!selected) {
       return;
     }
@@ -214,11 +243,12 @@ export default function App() {
   }
 
   async function onStart() {
-    const jobs = files.filter((file) => file.status === "queued" && file.validWav).map((file) => ({
+    const jobs = files.filter((file) => file.status === "queued" && file.validFile).map((file) => ({
       id: file.id,
       inputPath: file.path,
       outputDir: settings.outputDir,
-      postFilter: settings.postFilter
+      postFilter: settings.postFilter,
+      mediaType: file.mediaType
     }));
     if (jobs.length === 0) {
       toast.error("No valid queued files to process.");
@@ -296,7 +326,7 @@ export default function App() {
                 <div className="h-full bg-gradient-to-r from-purple-500 to-cyan-500 animate-pulse w-full"></div>
               </div>
               <div className="flex justify-between items-center">
-                <p className="text-sm text-cyan-400 animate-pulse">Installing PyTorch &amp; DeepFilterNet…</p>
+                <p className="text-sm text-cyan-400 animate-pulse">Installing PyTorch, DeepFilterNet &amp; FFmpeg…</p>
                 <button
                   onClick={() => setShowInstallLogs(!showInstallLogs)}
                   className="text-xs underline text-zinc-500 hover:text-white"
@@ -376,7 +406,7 @@ export default function App() {
             onClick={chooseFiles}
             disabled={running}
           >
-            Add WAV files
+            Add Files
           </button>
           <button
             className="group flex items-center gap-2 rounded-lg bg-gradient-to-r from-purple-600 to-cyan-500 px-5 py-2.5 text-sm font-semibold text-white shadow-[0_0_20px_rgba(168,85,247,0.4)] transition-all hover:scale-105 hover:shadow-[0_0_30px_rgba(168,85,247,0.6)] disabled:opacity-50 disabled:hover:scale-100"
@@ -411,7 +441,7 @@ export default function App() {
       <section className="grid gap-3 overflow-auto pb-3 flex-1 content-start">
         {files.length === 0 ? (
           <p className="rounded-xl border border-dashed border-white/10 bg-white/5 py-12 text-center text-sm text-zinc-500">
-            Drop WAV files here or click Add WAV files
+            Drop WAV, MP3, or MP4 files here or click Add Files
           </p>
         ) : (
           files.map((file) => (

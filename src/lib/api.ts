@@ -1,10 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { QueueStartPayload } from "./types";
 
-export interface WavInfo {
+export interface MediaInfo {
   durationSec: number;
-  sampleRate: number;
-  channels: number;
+  sampleRate: number | null;
+  channels: number | null;
+  mediaType: string;
+  hasAudio: boolean;
+  hasVideo: boolean;
 }
 
 export async function checkEnvironment(): Promise<boolean> {
@@ -23,8 +26,12 @@ export async function getModelStatus(): Promise<string> {
   return invoke("get_model_status");
 }
 
-export async function probeWav(path: string): Promise<WavInfo> {
-  return invoke<WavInfo>("probe_wav", { path });
+export async function probeMedia(path: string): Promise<MediaInfo> {
+  return invoke<MediaInfo>("probe_media", { path });
+}
+
+export async function checkFfmpeg(): Promise<boolean> {
+  return invoke<boolean>("check_ffmpeg");
 }
 
 export async function startQueue(payload: QueueStartPayload): Promise<void> {

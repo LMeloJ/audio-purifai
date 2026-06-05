@@ -9,24 +9,48 @@ use crate::{queue, worker, AppState};
 use std::path::PathBuf;
 
 pub fn get_venv_bin_dir(_app: &AppHandle) -> Result<PathBuf, String> {
-    let mut venv_dir = std::env::current_exe()
-        .map(|exe| exe.parent().unwrap().join(".venv"))
-        .unwrap_or_default();
+    let python_name = if cfg!(target_os = "windows") {
+        "python.exe"
+    } else {
+        "python"
+    };
+    let bin_subdir = if cfg!(target_os = "windows") {
+        "Scripts"
+    } else {
+        "bin"
+    };
 
-    // Fallback for dev mode: check current directory
-    if !venv_dir.exists() {
-        let cwd = std::env::current_dir().unwrap_or_default();
-        let fallback = cwd.join(".venv");
-        if fallback.exists() {
-            venv_dir = fallback;
+    // Collect candidate .venv locations
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    // 1. Next to the current executable (production)
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            candidates.push(parent.join(".venv"));
         }
     }
 
-    if cfg!(target_os = "windows") {
-        Ok(venv_dir.join("Scripts"))
-    } else {
-        Ok(venv_dir.join("bin"))
+    // 2-3. Current working directory and its parent (dev mode)
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join(".venv"));
+        candidates.push(cwd.join("..").join(".venv"));
     }
+
+    // Return the first candidate that actually contains a Python executable
+    for venv in &candidates {
+        let bin_dir = venv.join(bin_subdir);
+        if bin_dir.join(python_name).exists() {
+            return Ok(bin_dir);
+        }
+    }
+
+    // Nothing found — return the first candidate so the error message is useful
+    let fallback = candidates
+        .into_iter()
+        .next()
+        .unwrap_or_default()
+        .join(bin_subdir);
+    Ok(fallback)
 }
 
 #[tauri::command]
@@ -162,8 +186,18 @@ pub async fn get_model_status(state: State<'_, AppState>) -> Result<String, Stri
 }
 
 #[tauri::command]
-pub fn probe_wav(path: String) -> Result<crate::audio::WavInfo, String> {
+pub fn probe_wav(path: String) -> Result<crate::audio::MediaInfo, String> {
     crate::audio::probe_wav(&path)
+}
+
+#[tauri::command]
+pub fn probe_media(path: String) -> Result<crate::audio::MediaInfo, String> {
+    crate::audio::probe_media(&path)
+}
+
+#[tauri::command]
+pub fn check_ffmpeg() -> Result<bool, String> {
+    Ok(crate::audio::ffmpeg_exe().is_ok() && crate::audio::ffprobe_exe().is_ok())
 }
 
 #[tauri::command]

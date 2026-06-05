@@ -10,7 +10,7 @@ export function DropZone({ isDragging }: DropZoneProps) {
       }`}
     >
       <div className="flex h-full items-center justify-center text-xl font-bold tracking-wider text-cyan-300 text-glow">
-        DROP WAV FILES HERE
+        DROP FILES HERE
       </div>
     </div>
   );

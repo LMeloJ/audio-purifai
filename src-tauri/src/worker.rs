@@ -40,6 +40,7 @@ pub struct EnhanceCommand {
     pub input: String,
     pub output_dir: String,
     pub post_filter: bool,
+    pub media_type: String,
 }
 
 /// Shared state for the persistent worker process.
@@ -131,9 +132,15 @@ pub async fn spawn_worker(app: AppHandle, state: &WorkerState) -> Result<(), Str
     )
     .map_err(|e| e.to_string())?;
 
+    // Resolve ffmpeg/ffprobe paths to pass to the worker
+    let ffmpeg_path = crate::audio::ffmpeg_exe().unwrap_or_default();
+    let ffprobe_path = crate::audio::ffprobe_exe().unwrap_or_default();
+
     let mut cmd = tokio::process::Command::new(&python);
     cmd.arg(&script)
         .env("PYTHONIOENCODING", "utf-8")
+        .env("FFMPEG_PATH", &ffmpeg_path)
+        .env("FFPROBE_PATH", &ffprobe_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null()); // suppress Python warnings / logs

@@ -1,6 +1,6 @@
 [package]
 name = "audio-enhancer"
-version = "0.2.1"
+version = "0.3.0"
 description = "Bulk WAV enhancer desktop app using DeepFilterNet2"
 authors = ["Audio Enhancer Team"]
 edition = "2021"

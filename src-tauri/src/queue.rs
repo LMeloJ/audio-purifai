@@ -19,6 +19,7 @@ pub struct QueueJob {
     pub input_path: String,
     pub output_dir: String,
     pub post_filter: bool,
+    pub media_type: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -60,6 +61,7 @@ pub async fn process_queue(
             input: job.input_path.clone(),
             output_dir: resolved_output,
             post_filter: job.post_filter,
+            media_type: job.media_type.clone(),
         };
 
         if let Err(e) = worker::send_job(worker_state, &cmd).await {
