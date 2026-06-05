@@ -45,6 +45,17 @@ def main():
 
     try:
         import torch
+        import os
+        
+        # Force DeepFilterNet and PyTorch to use a local cache directory
+        # to avoid polluting the user's global AppData folder.
+        local_cache = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".venv", "df_cache")
+        os.makedirs(local_cache, exist_ok=True)
+        os.environ["TORCH_HOME"] = local_cache
+        
+        import df.utils
+        df.utils.get_cache_dir = lambda: local_cache
+
         from df.enhance import init_df, enhance
         from df.io import load_audio, save_audio
     except ImportError as e:
