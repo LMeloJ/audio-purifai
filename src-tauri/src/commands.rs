@@ -8,11 +8,9 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::{queue, worker, AppState};
 use std::path::PathBuf;
 
-pub fn get_venv_bin_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let mut venv_dir = app
-        .path()
-        .app_local_data_dir()
-        .map(|dir| dir.join(".venv"))
+pub fn get_venv_bin_dir(_app: &AppHandle) -> Result<PathBuf, String> {
+    let mut venv_dir = std::env::current_exe()
+        .map(|exe| exe.parent().unwrap().join(".venv"))
         .unwrap_or_default();
 
     // Fallback for dev mode: check current directory
@@ -44,8 +42,9 @@ pub fn check_environment(app: AppHandle) -> Result<bool, String> {
 
 #[tauri::command]
 pub async fn initialize_environment(app: AppHandle) -> Result<(), String> {
-    let app_dir = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
-    std::fs::create_dir_all(&app_dir).map_err(|e| e.to_string())?;
+    let app_dir = std::env::current_exe()
+        .map(|exe| exe.parent().unwrap().to_path_buf())
+        .map_err(|e| e.to_string())?;
 
     let script_name = if cfg!(target_os = "windows") {
         "setup-env.ps1"
