@@ -124,16 +124,25 @@ pub fn probe_media(path: &str) -> Result<MediaInfo, String> {
     // Use ffprobe for everything else (or as WAV fallback)
     let ffprobe = ffprobe_exe()?;
 
-    let output = Command::new(&ffprobe)
-        .args([
-            "-v",
-            "quiet",
-            "-print_format",
-            "json",
-            "-show_streams",
-            "-show_format",
-            path,
-        ])
+    let mut cmd = Command::new(&ffprobe);
+    cmd.args([
+        "-v",
+        "quiet",
+        "-print_format",
+        "json",
+        "-show_streams",
+        "-show_format",
+        path,
+    ]);
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let output = cmd
         .output()
         .map_err(|e| format!("Failed to run ffprobe: {}", e))?;
 

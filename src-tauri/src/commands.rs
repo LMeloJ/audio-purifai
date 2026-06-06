@@ -61,7 +61,11 @@ pub fn check_environment(app: AppHandle) -> Result<bool, String> {
     } else {
         "python"
     };
-    Ok(bin_dir.join(exe_name).exists())
+    
+    let python_ok = bin_dir.join(exe_name).exists();
+    let ffmpeg_ok = crate::audio::ffmpeg_exe().is_ok() && crate::audio::ffprobe_exe().is_ok();
+    
+    Ok(python_ok && ffmpeg_ok)
 }
 
 #[tauri::command]

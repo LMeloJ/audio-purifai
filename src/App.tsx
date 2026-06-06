@@ -199,7 +199,7 @@ export default function App() {
           status: "queued",
           message: valid ? undefined : "No audio track found"
         });
-      } catch {
+      } catch (e) {
         additions.push({
           id,
           path,
@@ -210,7 +210,7 @@ export default function App() {
           hasAudio: false,
           hasVideo: false,
           status: "error",
-          message: "Could not read file"
+          message: typeof e === "string" ? e : "Could not read file"
         });
       }
     }
