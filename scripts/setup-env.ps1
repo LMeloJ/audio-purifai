@@ -18,7 +18,7 @@ $FfmpegExe = Join-Path $FfmpegDir "ffmpeg.exe"
 if (-not (Test-Path $FfmpegExe)) {
     Write-Host "Downloading FFmpeg..."
     $FfmpegZip = Join-Path $AppDir "ffmpeg.zip"
-    $FfmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+    $FfmpegUrl = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
     Invoke-WebRequest -Uri $FfmpegUrl -OutFile $FfmpegZip
     Expand-Archive -Path $FfmpegZip -DestinationPath $FfmpegDir -Force
     # Move binaries from nested folder to ffmpeg_bin root
